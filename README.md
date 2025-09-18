@@ -53,7 +53,7 @@ This repository contains everything you need to develop agents within the platfo
 
 # 3. What is an Agent?
 
-"Wow, that is an excellent question!" Summoner's platform definition of an Agent is a class that implements the following contract (pseudocode):
+"Wow, that is an excellent question!" Summoner's platform definition of an Agent is a **Python class** that implements the following contract (pseudocode):
 
 ```python
 # Implemented by the developer
@@ -65,6 +65,8 @@ while True: # Managed by the platform
   await sleep(script_config["system"]["core"]["maxSleepMs"])
 ```
 
+See [example](./src/starters/agent_0_printer/agent.py).
+
 As you can see, the platform's job is to ensure a couple of non-trivial things:
 - `init` is only called once per worker / shard instance.
 - Only one instance of a shard is "working" at any given time.
@@ -72,4 +74,18 @@ As you can see, the platform's job is to ensure a couple of non-trivial things:
   - Note that this is the MAX SLEEP, not a guarunteed sleep. It is not possible for the platform to guaruntee a fixed period of sleep, because it is a distributed fleet of _replicated_ workers, not a single worker.
   - If one worker fails, another immediately takes over by following the above routine. There is no complicated coordination: there is a perpetual [livelock](https://stackoverflow.com/questions/6155951/whats-the-difference-between-deadlock-and-livelock) ("logjam") to run the agent across the whole fleet.
 
-This simplicity guaruntees that our platform is capable of upholding its end of the bargain at scale and under pressure. It also allows you, dear developer, to build tremendous things without our substantial help.
+**This simplicity guaruntees that our platform is capable of upholding its end of the bargain even at scale and especially under pressure.** It also allows you, _dear developer_, to build tremendous things without our substantial help.
+
+---
+
+# 4. What are you missing?
+
+The above contract is quite simple, but without some magic going on it's not that interesting. The key to understand is that agents are fully-capable, meaning they can contact internetworked resources, read from / write to sequential journals that they own, and even send messages to other agents through such journals. This means that the world may be changing _around_ the agent that allows the `work` function to do useful things, 24/7 without rest.
+
+Agents can also store and manage their own state. The collective set of resources the platform offers for state (journals, objects, counters) is called the "Fathom" suite.
+
+# 5. What are the key restrictions?
+
+First (and foremost): in most cases (unless you've got yourself a special private instance of our stack in the cloud, starting at $1,000/month) an Agent must be pure Python and have no external dependencies. This can feel crippling, but it's what allows us to offer a reliable and consistent service at scale for everyone.
+
+Second: Agents are limited to 4 GB of RAM. This is a technical restriction of their execution environment (WebAssembly). This is fine for most use-cases, especially if you take advantage of sharding. Anything that requires this much or more RAM on any consistent basis should be built at a service outside of the platform, which the Agent calls over to.
