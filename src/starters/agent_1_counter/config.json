@@ -1,0 +1,16 @@
+{
+    "system": {
+        "meta": {
+            "name": "SimpleAgent",
+            "description": "Minimal agent to demonstrate basic as-frequently-as-possible working"
+        },
+        "core": {
+            "repository": {
+                "type": "github",
+                "path": "git@github.com:Summoner-Network/frontend.git"
+            },
+            "shardWidth": 16,
+            "maxSleepMs": 1000
+        }
+    }
+}
