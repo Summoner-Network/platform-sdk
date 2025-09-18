@@ -86,6 +86,12 @@ Agents can also store and manage their own state. The collective set of resource
 
 # 5. What are the key restrictions?
 
-First (and foremost): in most cases (unless you've got yourself a special private instance of our stack in the cloud, starting at $1,000/month) an Agent must be pure Python and have no external dependencies. This can feel crippling, but it's what allows us to offer a reliable and consistent service at scale for everyone.
+**First (and foremost):** in most cases (unless you've got yourself a special private instance of our stack in the cloud, starting at $1,000/month) an Agent must be pure Python and have no external dependencies. This can feel crippling, but it's what allows us to offer a reliable and consistent service at scale for everyone.
 
-Second: Agents are limited to 4 GB of RAM. This is a technical restriction of their execution environment (WebAssembly). This is fine for most use-cases, especially if you take advantage of sharding. Anything that requires this much or more RAM on any consistent basis should be built at a service outside of the platform, which the Agent calls over to.
+**Second:** Agents are limited to 4 GB of RAM. This is a technical restriction of their execution environment (WebAssembly). This is fine for most use-cases, especially if you take advantage of sharding. Anything that requires this much or more RAM on any consistent basis should be built at a service outside of the platform, which the Agent calls over to.
+
+**Third:** Agents on the platform are **versioned** and **versions are immutable**. Agents can be deleted entirely, but this is subject to a 30-day delay in order to notify dependents and enhance security posture. This prevents supply-chain attacks plugging in malicious agent code to standing traffic flows. Deploying an agent is a special and substantial undertaking, so treat it as one; test well, and ensure your design is sound to ship for a long time. _Multiple versions of an agent can be active at the same time, but they have entirely separate state._
+
+**Fourth:** Agents _entirely manage their own data integrity_, meaning there is no data mutation without going through the Agent's `work` contract. This eliminates massive classes of catastrophic security risks should an API key become compromised, when combined with the versioned immutability of agents.
+
+These restrictions are minimal in the context of cross-organizational automation, and they're what allow us to offer a secure and stable environment to everyone even in adversarial and suboptimal conditions!
