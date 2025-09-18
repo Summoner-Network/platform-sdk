@@ -48,3 +48,28 @@ Visit the `frontend` [here](https://github.com/Summoner-Network/frontend) and fo
 Leave the stack running. It is happy to do work and have things thrown at it no problem, you shouldn't need to touch it. If you do decide to touch it for good reasons, please open an issue to contribute to the `frontend` repository so that we can absorb your helpful contribution.
 
 This repository contains everything you need to develop agents within the platform, alongside the platform itself (which you have running locally)!
+
+---
+
+# 3. What is an Agent?
+
+"Wow, that is an excellent question!" Summoner's platform definition of an Agent is a class that implements the following contract (pseudocode):
+
+```python
+# Implemented by the developer
+await agent.init(script_config, shard_config)
+while True: # Managed by the platform
+  # Implemented by the developer
+  await agent.work()
+  # Managed by the platform
+  await sleep(script_config["system"]["core"]["maxSleepMs"])
+```
+
+As you can see, the platform's job is to ensure a couple of non-trivial things:
+- `init` is only called once per worker / shard instance.
+- Only one instance of a shard is "working" at any given time.
+- The `work` function is called _as frequently as the "max sleep" allows_ (may be 0).
+  - Note that this is the MAX SLEEP, not a guarunteed sleep. It is not possible for the platform to guaruntee a fixed period of sleep, because it is a distributed fleet of _replicated_ workers, not a single worker.
+  - If one worker fails, another immediately takes over by following the above routine. There is no complicated coordination: there is a perpetual [livelock](https://stackoverflow.com/questions/6155951/whats-the-difference-between-deadlock-and-livelock) ("logjam") to run the agent across the whole fleet.
+
+This simplicity guaruntees that our platform is capable of upholding its end of the bargain at scale and under pressure. It also allows you, dear developer, to build tremendous things without our substantial help.
