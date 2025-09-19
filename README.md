@@ -95,3 +95,15 @@ Agents can also store and manage their own state. The collective set of resource
 **Fourth:** Agents _entirely manage their own data integrity_, meaning there is no data mutation without going through the Agent's `work` contract. This eliminates massive classes of catastrophic security risks should an API key become compromised, when combined with the versioned immutability of agents.
 
 These restrictions are minimal in the context of cross-organizational automation, and they're what allow us to offer a `secure and stable` environment to everyone even in adversarial and suboptimal conditions!
+
+---
+
+# 6. What is the definition of a (Multi-)Agent System?
+> The definition of a multi-agent system is a pure python project containing one or more `agent.py` files, each adjacent to a `config` folder, containing a `config.json` file and a `shards` folder, containing at least one json file.
+
+To be clear, one minimal agent looks like this somewhere in the project directory structure:
+- ./agent.py
+- ./config
+  - config.json
+  - ./shards
+    - 1.json

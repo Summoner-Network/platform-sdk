@@ -1,7 +1,8 @@
 {
     "system": {
         "meta": {
-            "name": "SimpleAgent",
+            "name": "CounterAgent@1",
+            "semver": [0, 0, 1],
             "description": "Minimal agent to demonstrate basic as-frequently-as-possible working"
         },
         "core": {
@@ -10,7 +11,8 @@
                 "path": "git@github.com:Summoner-Network/frontend.git"
             },
             "shardWidth": 16,
-            "maxSleepMs": 1000
+            "maxSleepMs": 1000,
+            "promisedMs": 5000
         }
     }
 }
