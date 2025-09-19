@@ -12,7 +12,8 @@
             },
             "shardWidth": 16,
             "maxSleepMs": 1000,
-            "promisedMs": 5000
+            "promisedMs": 5000,
+            "fixationMs": 60000
         }
     }
 }
