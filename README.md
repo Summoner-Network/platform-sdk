@@ -31,6 +31,7 @@
                                                            
 ```
 
+![](./diagram.png)
 ---
 
 **Summoner is not a typical platform.** We have specifically engineered it, with great discipline, so that you (the developer) can clone our stack and run it locally. You will be running and testing your multi-agent system in the equivalent of a full production environment, so that you can deploy with confidence.
@@ -86,7 +87,7 @@ Agents can also store and manage their own state. The collective set of resource
 
 # 5. What are the key restrictions?
 
-**First (and foremost):** in most cases (unless you've got yourself a special private instance of our stack in the cloud, starting at $1,000/month) an Agent must be pure Python and have no external dependencies. This can feel crippling, but it's what allows us to offer a reliable and consistent service at scale for everyone.
+**First (and foremost):** in most cases (unless you've got yourself a special private instance of our stack in the cloud, starting at $1,000/month) an Agent must be pure Python and have no external dependencies. This can feel crippling, but it's what allows us to offer a reliable and consistent service at scale for everyone. If you must use a dependency, use pip's `--target` argument to vendor that dependency into your project and use it directly. However, remember that **codespace** is a limited and expensive resource!
 
 **Second:** Agents are limited to 4 GB of RAM. This is a technical restriction of their execution environment (WebAssembly). This is fine for most use-cases, especially if you take advantage of sharding. Anything that requires this much or more RAM on any consistent basis should be built at a service outside of the platform, which the Agent calls over to.
 
