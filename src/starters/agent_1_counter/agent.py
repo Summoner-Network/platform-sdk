@@ -12,7 +12,7 @@ class Agent:
         "host": "b7b4b6da-1ebd-4e4e-8bb0-dcc14640e2c0"
     }
     """
-    async def init(self, script_config: Dict, shard_config: Dict):
+    async def init(self, script_config: Dict, shard_config: Dict, dbro):
         # There is no logger object to initialize; we just set the counter.
         self.counter = 0
         
@@ -23,7 +23,7 @@ class Agent:
         }
         slog.info("Agent initialized.", context=init_context)
 
-    async def work(self):
+    async def work(self, dbrw):
         # Log the work event with the counter as context.
         slog.info(
             "Agent is performing work.", 

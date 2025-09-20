@@ -10,7 +10,7 @@ class Agent:
     An agent that periodically performs an HTTP GET request to a specified URL
     and reports the status and latency using the print-based slog utility.
     """
-    async def init(self, script_config: Dict, shard_config: Dict):
+    async def init(self, script_config: Dict, shard_config: Dict, dbro):
         """
         Initializes the agent with the target URL and request settings.
         """
@@ -37,7 +37,7 @@ class Agent:
         }
         slog.info("Agent initialized successfully.", context=init_context)
 
-    async def work(self):
+    async def work(self, dbrw):
         """
         Executes a single work cycle: performs a GET request and logs the result.
         """
