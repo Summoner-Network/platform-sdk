@@ -1,7 +1,7 @@
 {
     "system": {
         "meta": {
-            "name": "SimpleAgent@2",
+            "name": "PingerAgent",
             "semver": [0, 0, 1],
             "description": "Minimal agent to demonstrate basic as-frequently-as-possible working"
         },

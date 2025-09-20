@@ -64,7 +64,7 @@ class Agent:
             slog.info("Health check successful.", context=success_context)
 
         # ✅ 4. Catch the specific FetchError from pyodide.http
-        except pyodide.http.FetchError as e:
+        except Exception as e:
             latency_ns = time.monotonic_ns() - start_ns
             error_context = {
                 "url": self.target_url,

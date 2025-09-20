@@ -1,7 +1,7 @@
 {
     "system": {
         "meta": {
-            "name": "CounterAgent@1",
+            "name": "CounterAgent",
             "semver": [0, 0, 1],
             "description": "Minimal agent to demonstrate basic as-frequently-as-possible working"
         },
