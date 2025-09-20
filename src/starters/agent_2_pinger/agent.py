@@ -1,43 +1,39 @@
+# src/starters/agent_2_pinger/agent.py
+
 from typing import Dict
 import time
-
-# Import the custom libraries
-import common.http as http
 import common.slog as slog
+import pyodide.http
 
 class Agent:
     """
     An agent that periodically performs an HTTP GET request to a specified URL
     and reports the status and latency using the print-based slog utility.
     """
-    async def init(self, script_config: Dict, shard_config: Dict, dbro):
+    async def head(self, script_config, shard_config, dbro):
         """
         Initializes the agent with the target URL and request settings.
         """
-        # Retrieve the URL from the script_config, raising an error if not provided.
-        self.target_url = script_config.get("url")
+        self.target_url = shard_config.url
         if not self.target_url:
             slog.error(
-                "Initialization failed: 'url' key missing from script_config.",
-                context={"script_config": script_config}
+                "Initialization failed: 'url' key missing from shard_config.",
+                context=shard_config.to_py()
             )
-            raise ValueError("The 'url' key must be present in script_config.")
+            raise ValueError("The 'url' key must be present in shard_config.")
 
-        # Retrieve the timeout or use a default of 10 seconds.
-        timeout = script_config.get("timeout", 10)
-
-        # Initialize an HTTP session to manage connection settings.
-        self.http_session = http.Session(timeout=timeout)
+        # The timeout is now an argument to pyfetch, so we just store it.
+        self.timeout_seconds = shard_config.timeout
         self.work_counter = 0
         
         init_context = {
             "target_url": self.target_url,
-            "timeout_seconds": timeout,
-            "shard_config": shard_config
+            "timeout_seconds": self.timeout_seconds,
+            "shard_config": shard_config.to_py()
         }
         slog.info("Agent initialized successfully.", context=init_context)
 
-    async def work(self, dbrw):
+    async def tail(self, dbrw):
         """
         Executes a single work cycle: performs a GET request and logs the result.
         """
@@ -48,37 +44,35 @@ class Agent:
         
         start_ns = time.monotonic_ns()
         try:
-            # Perform the GET request using the configured session.
-            response = self.http_session.get(self.target_url)
+            # ✅ 2. Use the awaitable pyodide.http.pyfetch
+            response = await pyodide.http.pyfetch(
+                self.target_url, 
+                timeout=self.timeout_seconds * 1000 # pyfetch timeout is in ms
+            )
             
-            # Check for HTTP errors (e.g., 404 Not Found, 500 Server Error).
+            # raise_for_status() works the same way
             response.raise_for_status()
 
             latency_ns = time.monotonic_ns() - start_ns
             
             success_context = {
                 "url": self.target_url,
-                "status_code": response.status_code,
+                # ✅ 3. The response object uses .status, not .status_code
+                "status_code": response.status,
                 "latency_ms": round(latency_ns / 1_000_000, 2)
             }
             slog.info("Health check successful.", context=success_context)
 
-        except http.HTTPError as e:
+        # ✅ 4. Catch the specific FetchError from pyodide.http
+        except pyodide.http.FetchError as e:
             latency_ns = time.monotonic_ns() - start_ns
             error_context = {
                 "url": self.target_url,
-                "status_code": e.response.status_code,
-                "reason": e.response.reason,
-                "latency_ms": round(latency_ns / 1_000_000, 2)
-            }
-            slog.error("Health check failed with HTTP error.", context=error_context)
-
-        except http.RequestException as e:
-            latency_ns = time.monotonic_ns() - start_ns
-            error_context = {
-                "url": self.target_url,
-                "error_type": type(e).__name__,
-                "latency_ms": round(latency_ns / 1_000_000, 2)
+                # The error response is attached to e.response
+                "status_code": e.response.status if e.response else None,
+                "reason": e.response.status_text if e.response else "N/A",
+                "latency_ms": round(latency_ns / 1_000_000, 2),
+                "error_type": type(e).__name__
             }
             slog.error(
                 "Health check failed with a request exception.",

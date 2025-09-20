@@ -1,3 +1,4 @@
 {
-    "url": "https://summoner.org"
+    "url": "https://summoner.org",
+    "timeout": 5000
 }

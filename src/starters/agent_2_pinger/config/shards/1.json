@@ -1,3 +1,4 @@
 {
-    "url": "https://apple.com"
+    "url": "https://apple.com",
+    "timeout": 5000
 }

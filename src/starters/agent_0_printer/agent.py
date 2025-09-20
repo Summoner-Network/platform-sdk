@@ -8,7 +8,7 @@ class Agent:
         "host": "b7b4b6da-1ebd-4e4e-8bb0-dcc14640e2c0"
     }
     """
-    async def init(self, script_config: Dict, shard_config: Dict, dbro):
+    async def head(self, script_config: Dict, shard_config: Dict, dbro):
         # There is no logger object to initialize.
         
         # Log the initialization event with configuration data in the context.
@@ -18,6 +18,6 @@ class Agent:
         }
         slog.info("Agent initialized.", context=init_context)
 
-    async def work(self, dbrw):
+    async def tail(self, dbrw):
         # Log the work event.
         slog.info("Agent is performing work.")
