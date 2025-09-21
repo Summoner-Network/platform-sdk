@@ -50,12 +50,6 @@ class TaskDefinition(TypedDict):
     interval_ticks: int
 
 
-class ClockState(TypedDict):
-    """The structure of the global clock."""
-
-    time: int
-
-
 # Type aliases
 HostAPI = Any
 Transaction = Any
@@ -79,13 +73,9 @@ class SchedulerAgent:
     async def head(self, script_config: Dict, shard_config: Dict, host: HostAPI):
         """Initializes the agent, setting up sharding and concurrency controls."""
         self.host = host
-        self.shard_id: int = shard_config.get("id", 0)
-        self.shard_count: int = shard_config.get("count", 1)
-        concurrency_limit = (
-            script_config.get("system", {})
-            .get("core", {})
-            .get("concurrency_limit", DEFAULT_CONCURRENCY_LIMIT)
-        )
+        self.shard_id: int = shard_config.id
+        self.shard_count: int = shard_config.count
+        concurrency_limit = script_config.system.core.concurrency_limit
         self.semaphore = asyncio.Semaphore(concurrency_limit)
         print(
             f"Scheduler agent initialized. Shard ID: {self.shard_id}, Concurrency: {concurrency_limit}"
@@ -117,16 +107,19 @@ class SchedulerAgent:
         """Advances the global clock by one tick atomically."""
         try:
             try:
+                # Attempt to fetch the existing clock as a raw byte object.
                 clock_raw = await self.host.get_object(OT_CLOCK, ID_GLOBAL_CLOCK)
-                clock_obj: ClockState = self._deserialize_json(clock_raw.data)
-                new_tick_count = clock_obj["time"] + 1
+                # The clock is a single 64-bit integer.
+                current_tick = bytes_to_int_array(clock_raw.data, byte_width=8)[0]
+                new_tick_count = current_tick + 1
             except Exception:
+                # Clock doesn't exist, initialize it.
                 print("Clock object not found, initializing to 1.")
                 clock_raw = self.host.new_object(OT_CLOCK, ID_GLOBAL_CLOCK)
                 new_tick_count = 1
 
-            updated_clock: ClockState = {"time": new_tick_count}
-            clock_raw.data = self._serialize_json(updated_clock)
+            # Store the new tick count as a 64-bit integer (8 bytes).
+            clock_raw.data = int_array_to_bytes([new_tick_count], byte_width=8)
             await self.host.put_object(clock_raw)
             return new_tick_count
         except Exception as e:
@@ -173,12 +166,14 @@ class SchedulerAgent:
 
                 if current_tick % task["interval_ticks"] == 0:
                     print(f"Executing scheduled task {task_id} at tick {current_tick}.")
+                    # The payload is two 64-bit integers, sent as a single 16-byte object.
+                    payload_bytes = int_array_to_bytes(
+                        [task["payload1"], task["payload2"]], byte_width=8
+                    )
                     await self.host.push_message(
                         task["owner"],
                         task["channel"],
-                        int_array_to_bytes(
-                            [task["payload1"], task["payload2"]], byte_width=8
-                        ),
+                        payload_bytes,
                     )
             except Exception as e:
                 print(f"Failed to process scheduled task {task_id}: {e}")
@@ -191,9 +186,9 @@ class SchedulerAgent:
         """Streams binary command blocks and dispatches workers."""
         jobs: List[asyncio.Task] = []
         try:
-            # We filter for blocks with marker 0, indicating they are unprocessed.
+            # We filter for blocks with markers 0 or 2, for unprocessed or errored.
             command_stream = self.host.stream_blocks(
-                "commands", markers=[MARKER_UNPROCESSED, MARKER_ERROR]
+                "commands", markers=[MARKER_UNPROCESSED, MARKER_ERROR], memory=0
             )
             async for block in command_stream:
                 job = asyncio.create_task(self._process_command_block(block))
@@ -240,8 +235,7 @@ class SchedulerAgent:
                 print(
                     f"Failed to process command block {command_id}. Rolled back. Error: {e}"
                 )
-                # On failure, the block is not marked and remains at MARKER_UNPROCESSED,
-                # allowing for retries on the next agent cycle for transient errors.
+                # On failure, the block is not marked, allowing for retries on the next agent cycle.
 
     async def _execute_command(self, tx: Transaction, command_ints: List[int]):
         """Dispatches a binary command to the appropriate handler."""
