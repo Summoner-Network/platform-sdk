@@ -1,7 +1,8 @@
+import sys
+import json
 import asyncio
 import datetime
-from typing import Dict, List, Any, TypedDict, Optional
-import common.slog as slog
+from typing import Dict, List, Any, TypedDict, Optional, Literal
 
 # === Configuration and Constants ===
 
@@ -15,89 +16,97 @@ OT_PROCESSED_COMMAND = 3
 # Association Types
 AT_SCHEDULED_TASK = "scheduled_task"
 
+# Block Markers
+MARKER_UNPROCESSED = 0
+MARKER_PROCESSED = 1
+MARKER_ERROR = 2
+
+# Command Action Codes
+CMD_REPEAT = 1
+CMD_DESIST = 2
+
 # Fixed Object IDs
 ID_TASK_ROOT = 0
 ID_GLOBAL_CLOCK = 1
 
 # === Data Structures (TypedDicts) ===
-# Using TypedDicts clarifies the expected shape of data objects.
+
 
 class TaskDefinition(TypedDict):
-    """The structure of a scheduled task object."""
+    """
+    The structure of a scheduled task object.
+    This is defined by 5 64-bit unsigned integers in the following order:
+    1. owner
+    2. channel
+    3. payload1
+    4. payload2
+    5. interval_ticks
+    """
+
     owner: int
-    channel: str
-    payload: Dict[str, Any]
+    channel: int
+    payload1: int
+    payload2: int
     interval_ticks: int
+
 
 class ClockState(TypedDict):
     """The structure of the global clock."""
+
     time: int
 
-# Type aliases for host interactions
+
+# Type aliases
 HostAPI = Any
 Transaction = Any
-CommandBlock = Dict[str, Any]
+CommandBlock = Any  # Opaque type from host, contains .id, .data, and .mark()
+ByteOrder = Literal["little", "big"]
 
 
 class SchedulerAgent:
     """
-    A persistent, command-driven scheduler agent.
-
-    It operates in a sharded environment, ensuring tasks are executed on time.
-    Command processing is strictly transactional and idempotent.
+    A persistent, command-driven scheduler agent using a binary data protocol.
     """
+
+    def _serialize_json(self, data: Dict[str, Any]) -> bytes:
+        """Serializes a dictionary to a UTF-8 encoded JSON byte string."""
+        return json.dumps(data, separators=(",", ":")).encode("utf-8")
+
+    def _deserialize_json(self, data: bytes) -> Dict[str, Any]:
+        """Deserializes a UTF-8 encoded JSON byte string into a dictionary."""
+        return json.loads(data)
 
     async def head(self, script_config: Dict, shard_config: Dict, host: HostAPI):
         """Initializes the agent, setting up sharding and concurrency controls."""
         self.host = host
-        self.shard_id: int = shard_config.id
-        self.shard_count: int = shard_config.count
-
-        # Determine the concurrency limit for parallel I/O operations
-        concurrency_limit = script_config.system.core.concurrency_limit
-
-        # Semaphore restricts the number of concurrent I/O operations.
+        self.shard_id: int = shard_config.get("id", 0)
+        self.shard_count: int = shard_config.get("count", 1)
+        concurrency_limit = (
+            script_config.get("system", {})
+            .get("core", {})
+            .get("concurrency_limit", DEFAULT_CONCURRENCY_LIMIT)
+        )
         self.semaphore = asyncio.Semaphore(concurrency_limit)
-
-        slog.info(
-            "Scheduler agent initialized.",
-            context={
-                "shard_id": self.shard_id,
-                "concurrency_limit": concurrency_limit
-            },
+        print(
+            f"Scheduler agent initialized. Shard ID: {self.shard_id}, Concurrency: {concurrency_limit}"
         )
 
-    # =========================================================================
-    # Main Work Loop
-    # =========================================================================
-
     async def tail(self):
-        """
-        The main execution cycle of the agent.
-        """
-        # 1. Advance the Global Clock
+        """The main execution cycle of the agent."""
         current_tick = await self._advance_clock()
-
         if current_tick is None:
-            # If the clock cannot be advanced reliably, we must halt the cycle
-            # to prevent incorrect task execution based on stale time.
-            slog.error("Halting work cycle due to failure in advancing the clock.")
+            print("Halting work cycle due to failure in advancing the clock.")
             return
 
-        # 2. Dispatch concurrent processing for Tasks and Commands
-        # We dispatch both phases concurrently to maximize throughput.
         task_jobs = await self._dispatch_task_processing(current_tick)
         command_jobs = await self._dispatch_command_processing()
 
-        # 3. Wait for all concurrent operations to complete
         all_jobs = task_jobs + command_jobs
         if all_jobs:
-            # Errors are handled within the individual jobs.
             await asyncio.gather(*all_jobs)
 
-        slog.info(
-            "Agent work cycle complete.",
-            context={"tick_count": current_tick, "shard_id": self.shard_id},
+        print(
+            f"Agent work cycle complete. Tick: {current_tick}, Shard ID: {self.shard_id}"
         )
 
     # =========================================================================
@@ -105,25 +114,23 @@ class SchedulerAgent:
     # =========================================================================
 
     async def _advance_clock(self) -> Optional[int]:
-        """Advances the global clock by one tick. Returns the new tick count or None on failure."""
-        # Note: This implements a read-modify-write. If the host supports atomic increments,
-        # that would be preferable.
+        """Advances the global clock by one tick atomically."""
         try:
             try:
-                # Attempt to fetch the existing clock.
-                clock: ClockState = await self.host.get_object(OT_CLOCK, ID_GLOBAL_CLOCK)
-                new_tick_count = clock.time + 1
+                clock_raw = await self.host.get_object(OT_CLOCK, ID_GLOBAL_CLOCK)
+                clock_obj: ClockState = self._deserialize_json(clock_raw.data)
+                new_tick_count = clock_obj["time"] + 1
             except Exception:
-                # Clock likely doesn't exist yet (e.g., first run).
-                slog.warn("Clock object not found, initializing to 1.")
+                print("Clock object not found, initializing to 1.")
+                clock_raw = self.host.new_object(OT_CLOCK, ID_GLOBAL_CLOCK)
                 new_tick_count = 1
-            
-            clock.time = new_tick_count
-            # Persist the new clock value.
-            await self.host.put_object(clock)
+
+            updated_clock: ClockState = {"time": new_tick_count}
+            clock_raw.data = self._serialize_json(updated_clock)
+            await self.host.put_object(clock_raw)
             return new_tick_count
         except Exception as e:
-            slog.error("Critical error while updating the clock.", context={"error": str(e)})
+            print(f"Critical error while updating the clock: {e}")
             return None
 
     # =========================================================================
@@ -131,165 +138,195 @@ class SchedulerAgent:
     # =========================================================================
 
     async def _dispatch_task_processing(self, current_tick: int) -> List[asyncio.Task]:
-        """Streams scheduled tasks assigned to this shard and dispatches concurrent workers."""
+        """Streams scheduled tasks and dispatches concurrent workers."""
         jobs: List[asyncio.Task] = []
-        # Stream associations from the root task ID, filtered for this shard.
-        task_stream = self.host.stream_assocs(
-            type=AT_SCHEDULED_TASK,
-            src=ID_TASK_ROOT,
-            shards=self.shard_count,
-            shard_id=self.shard_id,
-        )
-
-        async for association in task_stream:
-            task_id = association["target_id"]
-            # Create an asyncio Task for concurrent execution.
-            job = asyncio.create_task(
-                self._process_scheduled_task(task_id, current_tick)
+        try:
+            task_stream = self.host.stream_assocs(
+                type=AT_SCHEDULED_TASK,
+                src=ID_TASK_ROOT,
+                shards=self.shard_count,
+                shard_id=self.shard_id,
             )
-            jobs.append(job)
+            async for assoc_raw in task_stream:
+                job = asyncio.create_task(
+                    self._process_scheduled_task(assoc_raw.target_id, current_tick)
+                )
+                jobs.append(job)
+        except Exception as e:
+            print(f"Error dispatching task processing: {e}")
         return jobs
 
     async def _process_scheduled_task(self, task_id: int, current_tick: int):
-        """Worker coroutine: Checks if a task is due and executes it."""
-
-        # Wait if concurrency limit is reached.
+        """Worker: Checks if a task is due and executes it."""
         async with self.semaphore:
             try:
-                # Fetch the task definition.
-                task: TaskDefinition = await self.host.get_object(OT_TASK, task_id)
+                task_raw = await self.host.get_object(OT_TASK, task_id)
+                task_ints = bytes_to_int_array(task_raw.data, byte_width=8)
 
-                # Check if the task is due based on its interval.
-                if current_tick % task.interval_ticks == 0:
-                    slog.info(
-                        "Executing scheduled task.",
-                        context={"task_id": task_id, "tick": current_tick},
-                    )
-                    # Execute the task (e.g., send a message).
+                task: TaskDefinition = {
+                    "owner": task_ints[0],
+                    "channel": task_ints[1],
+                    "payload1": task_ints[2],
+                    "payload2": task_ints[3],
+                    "interval_ticks": task_ints[4],
+                }
+
+                if current_tick % task["interval_ticks"] == 0:
+                    print(f"Executing scheduled task {task_id} at tick {current_tick}.")
                     await self.host.push_message(
-                        task["owner"], task["channel"], task["payload"]
+                        task["owner"],
+                        task["channel"],
+                        int_array_to_bytes(
+                            [task["payload1"], task["payload2"]], byte_width=8
+                        ),
                     )
-
             except Exception as e:
-                # Catch errors to ensure the failure of one task does not stop the agent.
-                slog.error(
-                    "Failed to process a scheduled task.",
-                    context={"task_id": task_id, "error": str(e)},
-                )
+                print(f"Failed to process scheduled task {task_id}: {e}")
 
     # =========================================================================
-    # Command Processing (Transactional and Idempotent)
+    # Command Processing (Binary Protocol)
     # =========================================================================
 
     async def _dispatch_command_processing(self) -> List[asyncio.Task]:
-        """Streams incoming command blocks and dispatches concurrent workers."""
+        """Streams binary command blocks and dispatches workers."""
         jobs: List[asyncio.Task] = []
-        command_stream = self.host.stream_blocks("commands")
-
-        async for block in command_stream:
-            # Create an asyncio Task for concurrent execution.
-            job = asyncio.create_task(self._process_command_block(block))
-            jobs.append(job)
+        try:
+            # We filter for blocks with marker 0, indicating they are unprocessed.
+            command_stream = self.host.stream_blocks(
+                "commands", markers=[MARKER_UNPROCESSED, MARKER_ERROR]
+            )
+            async for block in command_stream:
+                job = asyncio.create_task(self._process_command_block(block))
+                jobs.append(job)
+        except Exception as e:
+            print(f"Error dispatching command processing: {e}")
         return jobs
 
     async def _process_command_block(self, block: CommandBlock):
-        """
-        Worker coroutine: Processes a command block atomically and idempotently.
-        """
-        command_id = block.get("id")
+        """Worker: Processes a binary command block atomically and idempotently."""
+        command_id = block.id
         if not command_id:
-            slog.error("Command block missing ID. Discarding.", context={"block": block})
-            await block.forget()
+            print(f"Command block missing ID. Marking as error.")
+            await block.mark(MARKER_ERROR)
             return
 
-        # Wait if concurrency limit is reached.
         async with self.semaphore:
-            # 1. Idempotency Check
             if await self.host.object_exists(OT_PROCESSED_COMMAND, command_id):
-                slog.info(
-                    "Skipping already processed command block (idempotency check).",
-                    context={"command_id": command_id},
-                )
-                await block.forget()
+                print(f"Skipping already processed command: {command_id}")
+                await block.mark(MARKER_PROCESSED)
                 return
 
-            # 2. Transactional Processing (Atomicity)
             tx = self.host.rwtx()
             try:
-                # Process individual commands within the block
-                for command in block.get("commands", []):
-                    await self._execute_command(tx, command)
+                # Deserialize the command from its raw byte format (6 x 64-bit uints)
+                command_ints = bytes_to_int_array(block.data, byte_width=8)
+                await self._execute_command(tx, command_ints)
 
-                # 3. Finalization
-                # These steps MUST occur within the same transaction as the command execution.
-
-                # Mark the command block as processed (for idempotency).
+                # Mark command as processed using a simple JSON marker
+                processed_marker = {
+                    "processed_at": int(datetime.datetime.now().timestamp())
+                }
                 await tx.put_object(
                     OT_PROCESSED_COMMAND,
                     command_id,
-                    {"processed_at": int(datetime.datetime.now().timestamp())},
+                    self._serialize_json(processed_marker),
                 )
-                # Acknowledge and remove the block from the stream.
-                await tx.forget(block)
-
-                # Commit the transaction. All changes apply atomically.
+                # Mark the block as processed within the same transaction.
+                await tx.mark(block, MARKER_PROCESSED)
                 await tx.commit()
-                slog.info(
-                    "Successfully committed command block.",
-                    context={"command_id": command_id},
-                )
-
+                print(f"Successfully committed command block: {command_id}")
             except Exception as e:
-                # 4. Rollback on Failure
-                # If any error occurs (including validation errors), rollback the entire transaction.
                 await tx.rollback()
-                slog.error(
-                    "Failed to process command block. Transaction rolled back.",
-                    context={"command_id": command_id, "error": str(e)},
+                print(
+                    f"Failed to process command block {command_id}. Rolled back. Error: {e}"
                 )
-                # The block is not forgotten, allowing for retry if the error is transient.
+                # On failure, the block is not marked and remains at MARKER_UNPROCESSED,
+                # allowing for retries on the next agent cycle for transient errors.
 
-    # === Command Handlers ===
-
-    async def _execute_command(self, tx: Transaction, command: Dict[str, Any]):
-        """Dispatches the command to the appropriate handler."""
-        action = command.get("action")
-
-        if action == "repeat":
-            await self._handle_repeat(tx, command)
-        elif action == "desist":
-            await self._handle_desist(tx, command)
+    async def _execute_command(self, tx: Transaction, command_ints: List[int]):
+        """Dispatches a binary command to the appropriate handler."""
+        action_code = command_ints[0]
+        if action_code == CMD_REPEAT:
+            await self._handle_repeat(tx, command_ints)
+        elif action_code == CMD_DESIST:
+            await self._handle_desist(tx, command_ints)
         else:
-            # Raise an error to force transaction rollback for unknown commands.
-            raise ValueError(f"Unknown command action received: {action}")
+            raise ValueError(f"Unknown command action code: {action_code}")
 
-    async def _handle_repeat(self, tx: Transaction, command: Dict[str, Any]):
-        """Handles the creation of a new repeating task."""
-        # Validation: Ensure required fields exist before proceeding.
-        required_fields = ["owner", "channel", "payload", "interval_ticks"]
-        if not all(field in command for field in required_fields):
-             # Raising an error triggers the transaction rollback.
-             raise ValueError(f"Missing required fields in 'repeat' command: {command}")
+    async def _handle_repeat(self, tx: Transaction, command_ints: List[int]):
+        """Handles creating a new repeating task from binary command."""
+        # command_ints: [CMD_REPEAT, owner, channel, payload1, payload2, interval_ticks]
+        task_data_list = command_ints[1:]  # Extract the 5 task integers
+        task_bytes = int_array_to_bytes(task_data_list, byte_width=8)
+        new_task_id = await tx.put_object(OT_TASK, 0, task_bytes)
+        await tx.create_assoc(src=ID_TASK_ROOT, tar=new_task_id, type=AT_SCHEDULED_TASK)
 
-        new_task: TaskDefinition = {
-            "owner": command["owner"],
-            "channel": command["channel"],
-            "payload": command["payload"],
-            "interval_ticks": command["interval_ticks"],
-        }
-        # Create the new task object (ID 0 usually means auto-assign ID).
-        new_task_id = await tx.put_object(OT_TASK, 0, new_task)
-        # Associate it with the root task list.
-        await tx.create_assoc(
-            src=ID_TASK_ROOT, tar=new_task_id, type=AT_SCHEDULED_TASK
+    async def _handle_desist(self, tx: Transaction, command_ints: List[int]):
+        """Handles removing an existing task from binary command."""
+        # command_ints: [CMD_DESIST, task_id, 0, 0, 0, 0]
+        task_id = command_ints[1]
+        await tx.delete_object(OT_TASK, task_id)
+
+
+# =========================================================================
+# Standalone Byte Conversion Utilities
+# =========================================================================
+
+
+def bytes_to_int_array(
+    data: bytes,
+    byte_width: int,
+    byte_order: ByteOrder = "big",
+    signed: bool = False,
+    output_list: Optional[List[int]] = None,
+) -> List[int]:
+    """Converts a bytes object into a list of integers."""
+    if byte_width <= 0:
+        raise ValueError("byte_width must be a positive integer.")
+    if byte_order not in ("little", "big"):
+        raise ValueError("byte_order must be either 'little' or 'big'.")
+    if len(data) % byte_width != 0:
+        raise ValueError(
+            f"Data length ({len(data)}) is not a multiple of byte width ({byte_width})."
         )
 
-    async def _handle_desist(self, tx: Transaction, command: Dict[str, Any]):
-        """Handles the removal of an existing task."""
-        task_id = command.get("task_id")
-        if not task_id:
-            raise ValueError(f"Missing 'task_id' in 'desist' command: {command}")
+    target_list = output_list if output_list is not None else []
+    if output_list is not None:
+        target_list.clear()
 
-        # Delete the task object itself.
-        # The associations touching it are auto-deleted.
-        await tx.delete_object(OT_TASK, task_id)
+    for i in range(0, len(data), byte_width):
+        target_list.append(
+            int.from_bytes(
+                data[i : i + byte_width], byteorder=byte_order, signed=signed
+            )
+        )
+    return target_list
+
+
+def int_array_to_bytes(
+    numbers: List[int],
+    byte_width: int,
+    byte_order: ByteOrder = "big",
+    signed: bool = False,
+    output_bytearray: Optional[bytearray] = None,
+) -> bytes:
+    """Converts a list of integers into a bytes object."""
+    if byte_width <= 0:
+        raise ValueError("byte_width must be a positive integer.")
+    if byte_order not in ("little", "big"):
+        raise ValueError("byte_order must be either 'little' or 'big'.")
+
+    target_bytearray = output_bytearray if output_bytearray is not None else bytearray()
+    if output_bytearray is not None:
+        target_bytearray.clear()
+
+    for num in numbers:
+        try:
+            target_bytearray.extend(
+                num.to_bytes(byte_width, byteorder=byte_order, signed=signed)
+            )
+        except OverflowError:
+            raise ValueError(
+                f"Number '{num}' cannot be represented in {byte_width} bytes."
+            )
+    return bytes(target_bytearray)
